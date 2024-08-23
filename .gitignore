@@ -1,0 +1,13 @@
+.aider*
+input/dijon-raft.mp4
+segment-anything-2/click-mask-working.py
+input/dijon-raft_frames/
+input/dijon-raft_masked.mp4
+venv
+# SAM2 checkpoint files
+segment-anything-2/checkpoints/sam2_hiera_base_plus.pt
+segment-anything-2/checkpoints/sam2_hiera_large.pt
+segment-anything-2/checkpoints/sam2_hiera_small.pt
+segment-anything-2/checkpoints/sam2_hiera_tiny.pt
+# Ignore uploads folder and its contents
+__pycache__

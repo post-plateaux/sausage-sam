@@ -1,0 +1,299 @@
+<!DOCTYPE html>
+<html lang="en" data-bs-theme="dark">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Video Processing App</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <style>
+        body { padding-top: 50px; }
+        .theme-toggle {
+            position: fixed;
+            top: 10px;
+            right: 10px;
+        }
+        #canvas-container {
+            position: relative;
+            margin-top: 20px;
+            overflow: auto;
+        }
+        #imageCanvas {
+            border: 1px solid #ddd;
+            max-width: 100%;
+            max-height: 70vh;
+            width: auto;
+            height: auto;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <button class="btn btn-outline-light theme-toggle" id="themeToggle">
+            <i class="bi bi-sun-fill"></i> Light Mode
+        </button>
+        <h1 class="mb-4">sausage-SAM</h1>
+        <form id="upload-form" enctype="multipart/form-data">
+            <div class="mb-3">
+                <label for="video" class="form-label">Select Video File</label>
+                <input type="file" class="form-control" id="video" name="video" accept="video/*" required>
+            </div>
+            <div class="mb-3 form-check">
+                <input type="checkbox" class="form-check-input" id="test_mode" name="test_mode">
+                <label class="form-check-label" for="test_mode">Test Mode</label>
+            </div>
+            <div class="mb-3">
+                <label for="test_duration" class="form-label">Test Duration (seconds)</label>
+                <input type="number" class="form-control" id="test_duration" name="test_duration" value="5" min="1">
+            </div>
+            <div class="mb-3">
+                <label for="batch_size" class="form-label">Batch Size</label>
+                <input type="number" class="form-control" id="batch_size" name="batch_size" value="250" min="1">
+            </div>
+            <button type="submit" class="btn btn-primary">Process Video</button>
+        </form>
+        <div id="canvas-container" style="display: none;">
+            <canvas id="imageCanvas"></canvas>
+            <div class="mt-2">
+                <button id="clearPoints" class="btn btn-secondary">Clear Points</button>
+                <button id="submitPoints" class="btn btn-primary">Submit Points</button>
+            </div>
+        </div>
+        <div id="result" class="mt-4"></div>
+        <div id="live-frame-container" style="display: none;">
+            <h3>Live Frame Processing</h3>
+            <div class="row">
+                <div class="col-md-6">
+                    <h4>Current Frame</h4>
+                    <img id="liveFrame" src="" alt="Live Frame" style="max-width: 100%; height: auto;">
+                </div>
+                <div class="col-md-6">
+                    <h4>Current Mask</h4>
+                    <img id="liveMask" src="" alt="Live Mask" style="max-width: 100%; height: auto;">
+                </div>
+            </div>
+        </div>
+        <div id="gif-container" class="mt-4" style="display: none;">
+            <h3>Processed Video (GIF)</h3>
+            <img id="processedGif" src="" alt="Processed Video GIF" style="width: 320px; height: 180px;">
+        </div>
+        <button id="quitButton" class="btn btn-danger mt-3">Quit and Close Window</button>
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.7.2/font/bootstrap-icons.css"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.0.1/socket.io.js"></script>
+    <script>
+        const socket = io();
+        let points = [];
+        let labels = [];
+        let videoPath = '';
+        
+        socket.on('progress_update', function(data) {
+            const progressBar = document.getElementById('progress-bar');
+            const statusText = document.getElementById('status-text');
+            
+            if (data.progress >= 0) {
+                progressBar.style.width = data.progress + '%';
+                progressBar.setAttribute('aria-valuenow', data.progress);
+                progressBar.textContent = data.progress.toFixed(2) + '%';
+            }
+            
+            statusText.textContent = data.status;
+            
+            if (data.progress === 100) {
+                const videoFileName = data.status.split(': ')[1].split('\n')[0];
+                const gifFileName = videoFileName.replace('.mp4', '.gif');
+                document.getElementById('result').innerHTML += `
+                    <div class="alert alert-success mt-3">
+                        Video processed successfully. 
+                        <a href="/uploads/${videoFileName}" target="_blank">Download processed video</a>
+                    </div>`;
+                document.getElementById('live-frame-container').style.display = 'none';
+                
+                // Show the GIF
+                const gifImage = document.getElementById('processedGif');
+                gifImage.src = `/uploads/${gifFileName}`;
+                gifImage.onload = function() {
+                    console.log('GIF loaded successfully');
+                    document.getElementById('gif-container').style.display = 'block';
+                };
+                gifImage.onerror = function() {
+                    console.error('Error loading GIF:', gifImage.error);
+                    document.getElementById('result').innerHTML += `
+                        <div class="alert alert-warning mt-3">
+                            Unable to display the GIF in the browser. You can download the video using the link above.
+                        </div>`;
+                };
+                console.log('GIF source set to:', gifImage.src);
+            } else if (data.progress === -1) {
+                document.getElementById('result').innerHTML += `
+                    <div class="alert alert-danger mt-3">
+                        Error: ${data.status}
+                    </div>`;
+                document.getElementById('live-frame-container').style.display = 'none';
+            }
+        });
+
+        socket.on('frame_update', function(data) {
+            const liveFrame = document.getElementById('liveFrame');
+            liveFrame.src = 'data:image/jpeg;base64,' + data.frame;
+            document.getElementById('live-frame-container').style.display = 'block';
+        });
+
+        socket.on('processing_complete', function(data) {
+            const gifImage = document.getElementById('processedGif');
+            gifImage.src = `/uploads/${data.gif_path.split('/').pop()}`;
+            document.getElementById('gif-container').style.display = 'block';
+        });
+
+        socket.on('mask_preview', function(data) {
+            const liveMask = document.getElementById('liveMask');
+            const liveFrame = document.getElementById('liveFrame');
+            liveMask.src = 'data:image/png;base64,' + data.mask;
+            liveFrame.src = 'data:image/jpeg;base64,' + data.frame;
+            document.getElementById('live-frame-container').style.display = 'block';
+        });
+
+        document.getElementById('upload-form').addEventListener('submit', function(e) {
+            e.preventDefault();
+            var formData = new FormData(this);
+            document.getElementById('result').innerHTML = `
+                <div class="progress mt-3">
+                    <div id="progress-bar" class="progress-bar" role="progressbar" style="width: 0%;" aria-valuenow="0" aria-valuemin="0" aria-valuemax="100">0%</div>
+                </div>
+                <div id="status-text" class="mt-2">Processing video... Please wait.</div>
+            `;
+            fetch('/process', {
+                method: 'POST',
+                body: formData
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (data.status === 'awaiting_input') {
+                    showImageForInput(data.frame);
+                    videoPath = data.video_path;
+                    console.log('Video path:', videoPath);  // Add this line for debugging
+                } else if (data.status !== 'processing') {
+                    document.getElementById('result').innerHTML += `
+                        <div class="alert alert-danger mt-3">
+                            Error: ${data.message}
+                        </div>`;
+                }
+            })
+            .catch(error => {
+                console.error('Error:', error);
+                document.getElementById('result').innerHTML += `
+                    <div class="alert alert-danger mt-3">
+                        An error occurred during processing.
+                    </div>`;
+            });
+        });
+
+        function showImageForInput(frameBase64) {
+            const canvas = document.getElementById('imageCanvas');
+            const ctx = canvas.getContext('2d');
+            const img = new Image();
+            img.onload = function() {
+                canvas.width = img.width;
+                canvas.height = img.height;
+                ctx.drawImage(img, 0, 0);
+                document.getElementById('canvas-container').style.display = 'block';
+            };
+            img.src = 'data:image/jpeg;base64,' + frameBase64;
+
+            canvas.onclick = function(event) {
+                const rect = canvas.getBoundingClientRect();
+                const scaleX = canvas.width / rect.width;
+                const scaleY = canvas.height / rect.height;
+                const x = (event.clientX - rect.left) * scaleX;
+                const y = (event.clientY - rect.top) * scaleY;
+                points.push([x, y]);
+                labels.push(event.button === 0 ? 1 : 0);  // Left click: 1, Right click: 0
+                drawPoint(ctx, x, y, event.button === 0 ? 'green' : 'red');
+            };
+        }
+
+        function drawPoint(ctx, x, y, color) {
+            ctx.beginPath();
+            ctx.arc(x, y, 5, 0, 2 * Math.PI);
+            ctx.fillStyle = color;
+            ctx.fill();
+        }
+
+        document.getElementById('clearPoints').addEventListener('click', function() {
+            const canvas = document.getElementById('imageCanvas');
+            const ctx = canvas.getContext('2d');
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            points = [];
+            labels = [];
+            const img = new Image();
+            img.onload = function() {
+                ctx.drawImage(img, 0, 0);
+            };
+            img.src = canvas.toDataURL();
+        });
+
+        document.getElementById('submitPoints').addEventListener('click', function() {
+            console.log('Submitting points. Video path:', videoPath);  // Add this line for debugging
+            fetch('/start_processing', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({
+                    points: points,
+                    labels: labels,
+                    video_path: videoPath,
+                    test_mode: document.getElementById('test_mode').checked,
+                    test_duration: parseInt(document.getElementById('test_duration').value),
+                    batch_size: parseInt(document.getElementById('batch_size').value)
+                }),
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (data.status === 'processing') {
+                    document.getElementById('canvas-container').style.display = 'none';
+                    document.getElementById('result').innerHTML = `
+                        <div class="progress mt-3">
+                            <div id="progress-bar" class="progress-bar" role="progressbar" style="width: 0%;" aria-valuenow="0" aria-valuemin="0" aria-valuemax="100">0%</div>
+                        </div>
+                        <div id="status-text" class="mt-2">Processing video... Please wait.</div>
+                    `;
+                } else {
+                    document.getElementById('result').innerHTML += `
+                        <div class="alert alert-danger mt-3">
+                            Error: ${data.message}
+                        </div>`;
+                }
+            })
+            .catch(error => {
+                console.error('Error:', error);
+                document.getElementById('result').innerHTML += `
+                    <div class="alert alert-danger mt-3">
+                        An error occurred during processing.
+                    </div>`;
+            });
+        });
+
+        // Theme toggle functionality
+        const themeToggle = document.getElementById('themeToggle');
+        const html = document.documentElement;
+
+        themeToggle.addEventListener('click', () => {
+            if (html.getAttribute('data-bs-theme') === 'dark') {
+                html.setAttribute('data-bs-theme', 'light');
+                themeToggle.innerHTML = '<i class="bi bi-moon-fill"></i> Dark Mode';
+            } else {
+                html.setAttribute('data-bs-theme', 'dark');
+                themeToggle.innerHTML = '<i class="bi bi-sun-fill"></i> Light Mode';
+            }
+        });
+
+        // Quit button functionality
+        document.getElementById('quitButton').addEventListener('click', function() {
+            socket.emit('quit');
+            window.close();
+        });
+    </script>
+</body>
+</html>
